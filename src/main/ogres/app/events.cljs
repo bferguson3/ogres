@@ -367,9 +367,15 @@
   [[:db.fn/call assoc-scene :scene/grid-size size]])
 
 (defmethod
+  ^{:doc "Updates grid distance for the current scene."}
+  event-tx-fn :scene/change-grid-dist
+  [_ _ dist]
+  [[:db.fn/call assoc-scene :scene/grid-dist dist]])
+
+(defmethod
   ^{:doc "Applies both a grid origin and tile size to the current scene."}
   event-tx-fn :scene/apply-grid-options
-  [data _ origin size]
+  [data _ origin size dist]
   (let [{{camera-id :db/id point :camera/point
           {scene-id :db/id prev-origin :scene/grid-origin}
           :camera/scene} :user/camera}
@@ -380,6 +386,7 @@
       :camera/scene
       {:db/id scene-id
        :scene/grid-size size
+       :scene/grid-dist dist
        :scene/grid-origin origin}}]))
 
 (defmethod
@@ -398,7 +405,8 @@
   [data]
   (let [user (ds/entity data [:db/ident :user])
         scene (:db/id (:camera/scene (:user/camera user)))]
-    [[:db/retract scene :scene/grid-size]]))
+    [[:db/retract scene :scene/grid-size]
+    [:db/retract scene :scene/grid-dist]]))
 
 (defmethod
   ^{:doc "Updates whether or not the grid is drawn onto the current scene."}

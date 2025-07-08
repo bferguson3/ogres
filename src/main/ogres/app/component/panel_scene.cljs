@@ -1,7 +1,8 @@
 (ns ogres.app.component.panel-scene
   (:require [clojure.string :refer [replace]]
             [ogres.app.component :refer [icon pagination image fullscreen-dialog]]
-            [ogres.app.const :refer [grid-size]]
+            [ogres.app.const :refer [grid-size grid-dist]]
+            ;[ogres.app.const :refer [grid-dist]]
             [ogres.app.hooks :as hooks]
             [ogres.app.util :refer [display-size]]
             [uix.core :as uix :refer [defui $]]))
@@ -21,6 +22,7 @@
        {:camera/scene
         [:db/id
          [:scene/grid-size :default grid-size]
+         [:scene/grid-dist :default grid-dist]
          [:scene/show-grid :default true]
          [:scene/grid-align :default false]
          [:scene/dark-mode :default false]
@@ -250,6 +252,21 @@
           "The tile size is the width, in pixels, of one square in the
            selected background image. Changes to this value will scale the
            image such that each square will take up the width of one token."))
+      ($ :fieldset.fieldset
+        ($ :legend "Tile distance")
+        ($ :input.text.text-ghost
+          {:type "number"
+           :name "Tile distance"
+           :value (:scene/grid-dist scene)
+           :placeholder "5.0"
+           :on-change
+           (fn [event]
+             (let [value (.. event -target -value)
+                   value (js/Number value)]
+               (if (= value 0)
+                 (dispatch :scene/retract-grid-size)
+                 (dispatch :scene/change-grid-dist value))))}))
+
       ($ :fieldset.fieldset
         ($ :legend "Grid options")
         ($ :.input-group
