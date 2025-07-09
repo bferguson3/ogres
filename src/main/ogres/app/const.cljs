@@ -9,6 +9,10 @@
    correlates to 5 feet in this spatial system."
   70)
 
+(def ^:const grid-dist
+  "Length of in-game units of one square."
+  1.0)
+
 (def ^:const half-size
   "Half the length, in pixels, of a single square in the scene grid."
   35)

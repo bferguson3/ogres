@@ -3,16 +3,17 @@
             [ogres.app.component :refer [icon]]
             [ogres.app.component.scene-pattern :refer [pattern]]
             [ogres.app.hooks :as hooks]
+            [ogres.app.const :refer [grid-dist]]
             [ogres.app.util :as util]
             [uix.core :as uix :refer [defui $]]))
 
 (defn ^:private token-size [x]
-  (cond (<= x 3)  "Tiny"
-        (<  x 5)  "Small"
-        (<= x 5)  "Medium"
-        (<= x 10) "Large"
-        (<= x 15) "Huge"
-        (>  x 15) "Gargantuan"
+  (cond (<= x (*(/ 3 5) grid-dist))  "Tiny"
+        (<  x (* 1 grid-dist))  "Small"
+        (<= x (* 1 grid-dist))  "Medium"
+        (<= x (* 2 grid-dist)) "Large"
+        (<= x (* 3 grid-dist)) "Huge"
+        (>  x (* 3 grid-dist)) "Gargantuan"
         :else     "Unknown"))
 
 (def ^:private token-conditions
