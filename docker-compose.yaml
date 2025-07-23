@@ -5,7 +5,7 @@ services:
       dockerfile: ./deploy/frontend.dockerfile
       args:
         # Mode must be either "release" (for production) or "watch" (for development)
-        MODE: "release"
+        MODE: "watch"
         # The release tag for the client build (which can be accessed via `/play?r=VERSION`)
         # - Note: Only applicable for MODE `release`.
         VERSION: "dev"

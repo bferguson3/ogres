@@ -15,4 +15,4 @@
 
 (def ^:const grid-dist
   "Grid size in arbitrary units. Default 5.0"
-  1.5)
+  2.0)
