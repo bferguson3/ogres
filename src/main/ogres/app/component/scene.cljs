@@ -6,7 +6,7 @@
             [ogres.app.component.scene-draw :refer [draw]]
             [ogres.app.component.scene-objects :refer [objects]]
             [ogres.app.component.scene-pattern :refer [pattern]]
-            [ogres.app.const :refer [grid-size half-size]]
+            [ogres.app.const :refer [grid-size half-size grid-dist]]
             [ogres.app.hooks :as hooks]
             [ogres.app.modifiers :as modifiers]
             [ogres.app.svg :refer [circle->path poly->path]]
@@ -19,17 +19,16 @@
              :refer [DndContext useDraggable]
              :rename {DndContext dnd-context useDraggable use-draggable}]))
 
-(defn ^:private token-light-xf [user]
+(defn ^:private token-light-xf [host]
   (comp (filter
          (fn [token]
            (and (> (:token/light token) 0)
-                (or (not (:object/hidden token))
-                    (= user :host)))))
+                (or host (not (:object/hidden token))))))
         (map
          (fn [token]
            [(.-x (:object/point token))
             (.-y (:object/point token))
-            (+ (/ (* (:token/light token) grid-size) 5) grid-size)]))))
+            (+ (/ (* (:token/light token) grid-size) grid-dist) grid-size)]))))
 
 (def ^:private mask-area-xf
   (comp (filter :mask/enabled?) (map :mask/vecs)))
@@ -99,7 +98,7 @@
         ($ :use {:href "#scene-image-cover"})))))
 
 (def ^:private mask-defs-query
-  [:user/type
+  [:user/host
    {:user/camera
     [{:camera/scene
       [[:scene/masked :default false]
@@ -112,11 +111,11 @@
         [:db/id
          [:object/point :default vec/zero]
          [:object/hidden :default false]
-         [:token/light :default 15]]}]}]}])
+         [:token/light :default (* 3 grid-dist)]]}]}]}])
 
 (defui ^:private mask-defs []
   (let [result (hooks/use-query mask-defs-query)
-        {user :user/type
+        {host :user/host
          {{tokens :scene/tokens
            masks  :scene/masks
            light  :scene/lighting
@@ -124,13 +123,13 @@
     ($ :defs
       ($ pattern {:id "mask-pattern" :name :crosses})
       ($ :path {:id "masks-path" :d (transduce mask-area-xf poly->path masks)})
-      ($ :path {:id "light-path" :d (transduce (token-light-xf user) circle->path tokens)})
+      ($ :path {:id "light-path" :d (transduce (token-light-xf host) circle->path tokens)})
       ($ :clipPath {:id "masks-clip"}
         ($ :use {:href "#masks-path"}))
       ($ :mask {:id "masks-mask"}
         ($ :use {:href "#scene-image-cover" :fill "white"})
         ($ :use {:href "#masks-path"}))
-      (case [(= user :host) light masked]
+      (case [host light masked]
         [true :revealed true]
         ($ :mask {:id "mask-primary"}
           ($ :use {:href "#scene-image-cover" :fill "white"})
@@ -191,7 +190,7 @@
             ($ :use {:href "#masks-path"})))))))
 
 (def ^:private mask-polys-query
-  [[:user/type :default :host]
+  [[:user/host :default true]
    {:user/camera
     [[:camera/draw-mode :default :select]
      {:camera/scene
@@ -203,13 +202,13 @@
 (defui ^:private mask-polys []
   (let [dispatch (hooks/use-dispatch)
         result   (hooks/use-query mask-polys-query)
-        {user :user/type
+        {host :user/host
          {{masks :scene/masks} :camera/scene
           draw-mode :camera/draw-mode} :user/camera} result
         modes #{:mask :mask-toggle :mask-remove}]
     ($ :g.scene-mask-polys {:id "masks-polys"}
       (for [{id :db/id vecs :mask/vecs enabled? :mask/enabled?} masks
-            :while (and (= user :host) (contains? modes draw-mode))]
+            :while (and host (contains? modes draw-mode))]
         ($ :polygon.scene-mask-polygon
           {:key id
            :data-enabled enabled?
@@ -251,7 +250,7 @@
 
 (defui ^:private token [{:keys [node data]}]
   (let [radius (- half-size 2)
-        scale (/ (:token/size data) 5)
+        scale (/ (:token/size data) grid-dist)
         hash (:image/hash (:image/thumbnail (:token/image data)))
         fill (if (some? hash) (str "token-face-" hash) "token-face-default")]
     ($ :g.scene-token
@@ -260,11 +259,11 @@
        :data-flags (token-flags-attr data)
        :data-hidden (:object/hidden data)}
       (let [radius (:token/aura-radius data)
-            radius (if (> radius 0) (+ (* grid-size (/ radius 5)) (* scale half-size)) 0)]
+            radius (if (> radius 0) (+ (* grid-size (/ radius grid-dist)) (* scale half-size)) 0)]
         ($ :circle.scene-token-aura {:style {:r radius}}))
       ($ :g {:style {:transform (str "scale(" scale ")")}}
         ($ :circle.scene-token-shape {:r radius :fill (str "url(#" fill ")")})
-        ($ :circle.scene-token-base {:r (+ radius 5)})
+        ($ :circle.scene-token-base {:r (+ radius grid-dist)})
         (for [[deg flag] (mapv vector [-120 120 -65 65] (token-conditions data))
               :let [rn (* (/ js/Math.PI 180) deg)
                     cx (* (js/Math.sin rn) radius)
@@ -279,7 +278,7 @@
         ($ :circle.scene-token-ring {:style {:r radius}})))))
 
 (def ^:private tokens-defs-query
-  [[:user/type :default :host]
+  [[:user/host :default true]
    {:user/camera
     [{:camera/scene
       [{:scene/tokens
@@ -289,8 +288,8 @@
          [:object/hidden :default false]
          [:token/flags :default #{}]
          [:token/label :default ""]
-         [:token/size :default 5]
-         [:token/light :default 15]
+         [:token/size :default grid-dist]
+         [:token/light :default (* 3 grid-dist)]
          [:token/aura-radius :default 0]
          {:token/image [{:image/thumbnail [:image/hash]}]}
          {:scene/_initiative [:db/id :initiative/turn]}]}]}]}])
@@ -476,7 +475,7 @@
     ($ mask-polys)))
 
 (def ^:private scene-query
-  [:user/type
+  [:user/host
    {:user/camera
     [:db/id
      [:camera/point :default vec/zero]
@@ -492,7 +491,7 @@
 
 (defui ^:private scene-content [props]
   (let [dispatch (hooks/use-dispatch)
-        {user :user/type
+        {host :user/host
          {scene :camera/scene
           scale :camera/scale
           mode  :camera/draw-mode
@@ -500,7 +499,7 @@
         multi-select? (use-key "shift")]
     ($ :svg.scene
       {:ref (:ref props)
-       :data-user   (name user)
+       :data-user   (if host "host" "conn")
        :data-grid   (and (not= mode :grid) (:scene/show-grid scene))
        :data-theme  (if (:scene/dark-mode scene) "dark" "light")
        :data-light  (name (:scene/lighting scene))

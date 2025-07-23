@@ -8,17 +8,17 @@
 
 (def ^:private query-tokens
   [{:root/user
-    [[:user/type :default :conn]]}
+    [[:user/host :default true]]}
    {:root/token-images
     [:image/hash
      :image/name
-     :image/scope
+     :image/public
      {:image/thumbnail
       [:image/hash]}]}])
 
 (def ^:private query-user
   [:user/uuid
-   [:user/type :default :conn]
+   [:user/host :default true]
    [:user/color :default "red"]
    [:user/label :default ""]
    [:user/description :default ""]
@@ -39,18 +39,13 @@
 
 (def ^:private query-actions
   [{:root/user
-    [[:user/type :default :conn]
+    [[:user/host :default true]
      [:session/status :default :initial]]}
    {:root/session [:session/room]}])
 
 (defn ^:private players-xf [uuid]
   (comp (filter (comp (complement #{uuid}) :user/uuid))
-        (filter (comp #{:conn} :user/type))))
-
-(defn ^:private tokens-xf [user-type]
-  (if (= user-type :host)
-    (map identity)
-    (filter (comp #{:public} :image/scope))))
+        (filter (comp not :user/host))))
 
 (defn ^:private session-url [room-key]
   (let [params (js/URLSearchParams. #js {"r" VERSION "join" room-key})
@@ -76,46 +71,40 @@
       ($ icon {:name "camera-fill" :size 16})
       "Upload image")))
 
-(defui ^:private tokens
-  [{:keys [selected on-change]}]
-  (let [[page set-page] (uix/use-state 1)
-        {{user-type :user/type} :root/user
-         tokens :root/token-images}
-        (hooks/use-query query-tokens [:db/ident :root])
-        limit  10
-        tokens (into [] (tokens-xf user-type) tokens)
-        pages  (js/Math.ceil (/ (count tokens) limit))
-        start  (max (* (min (dec page) pages) limit) 0)
-        stop   (min (+ start limit) (count tokens))
-        images (subvec tokens start stop)]
-    ($ :.player-tokens {:data-paginated (> pages 1)}
-      ($ :.player-tokens-gallery
-        (for [idx (range limit)]
-          (if-let [image (get images idx)]
-            (let [{hash :image/hash name :image/name {display :image/hash} :image/thumbnail} image]
-              ($ component/image {:key display :hash display}
-                (fn [url]
-                  ($ :label.player-tokens-item.player-tokens-image
-                    {:style {:background-image (str "url(" url ")")} :aria-label name}
-                    ($ :input
-                      {:type "radio"
-                       :name "player-token"
-                       :value hash
-                       :checked (= selected hash)
-                       :on-change
-                       (fn [event]
-                         (on-change (.. event -target -value)))})))))
-            ($ :.player-tokens-item.player-tokens-placeholder
-              {:key idx}))))
-      ($ :.player-tokens-actions
-        ($ upload-button {})
-        ($ component/pagination
-          {:name "tokens-user-image"
-           :pages (max pages 1)
-           :value page
-           :on-change
-           (fn [page]
-             (set-page page))})))))
+(defui ^:private tokens [props]
+  (let [result (hooks/use-query query-tokens [:db/ident :root])
+        images (:root/token-images result)
+        host?  (:user/host (:root/user result))
+        xform  (filter (comp (if host? any? true?) :image/public))
+        limit  10]
+    ($ component/paginated {:data (sequence xform images) :page-size limit}
+      (fn [{:keys [data pages page on-change]}]
+        ($ :.player-tokens {:data-paginated (> pages 1)}
+          ($ :.player-tokens-gallery
+            (for [idx (range limit)]
+              (if-let [image (get data idx)]
+                (let [{hash :image/hash name :image/name {display :image/hash} :image/thumbnail} image]
+                  ($ component/image {:key display :hash display}
+                    (fn [url]
+                      ($ :label.player-tokens-item.player-tokens-image
+                        {:style {:background-image (str "url(" url ")")} :aria-label name}
+                        ($ :input
+                          {:type "radio"
+                           :name "player-token"
+                           :value hash
+                           :checked (= (:selected props) hash)
+                           :on-change
+                           (fn [event]
+                             ((:on-change props) (.. event -target -value)))})))))
+                ($ :.player-tokens-item.player-tokens-placeholder
+                  {:key idx}))))
+          ($ :.player-tokens-actions
+            ($ upload-button)
+            ($ component/pagination
+              {:name "tokens-user-image"
+               :pages pages
+               :value page
+               :on-change on-change})))))))
 
 (defui ^:private player-form
   [{:keys [user]}]
@@ -190,12 +179,12 @@
         result   (hooks/use-query query-panel [:db/ident :root])
         user     (:root/user result)
         {{room-code :session/room} :root/session
-         {user-type :user/type
+         {host :user/host
           user-status :session/status} :root/user} result]
     (if (or (= user-status :connecting) (= user-status :connected) (= user-status :disconnected))
       ($ :.form-session.session
         ($ :header ($ :h2 "Lobby"))
-        (if (and (= user-type :host) (some? room-code) (seq releases) (not= VERSION (last releases)))
+        (if (and host (some? room-code) (seq releases) (not= VERSION (last releases)))
           ($ :div
             ($ :.form-notice {:style {:margin-bottom 16}}
               ($ :p ($ :strong "Warning: ")
@@ -219,7 +208,7 @@
                   "Players can join your room by going to "
                   ($ :a {:href url :target "_blank"} url)
                   " and entering this code.")))))
-        (if (= user-type :host)
+        (if host
           ($ :fieldset.fieldset
             ($ :legend "Options")
             ($ :fieldset.session-options
@@ -228,10 +217,10 @@
                   ($ :input
                     {:type "checkbox"
                      :checked (:session/share-cursors (:root/session result))
-                     :aria-disabled (not= user-type :host)
+                     :aria-disabled (not host)
                      :on-change
                      (fn [event]
-                       (if (= user-type :host)
+                       (if host
                          (let [checked (.. event -target -checked)]
                            (dispatch :session/toggle-share-cursors checked))))})
                   ($ icon {:name "check" :size 20})
@@ -246,7 +235,7 @@
                          (dispatch :session/toggle-share-my-cursor checked)))})
                   ($ icon {:name "check" :size 20})
                   "Share my cursor")))))
-        (if (= user-type :conn)
+        (if (not host)
           ($ :fieldset.fieldset
             ($ :legend "Your character")
             ($ player-form {:user user})))
@@ -257,7 +246,7 @@
               ($ :section.session-players
                 ($ players-form
                   {:users (sequence (players-xf (:user/uuid user)) conns)
-                   :editable (= user-type :host)}))))))
+                   :editable host}))))))
       ($ :<>
         ($ :header ($ :h2 "Lobby"))
         ($ :.prompt
@@ -268,20 +257,20 @@
 (defui ^:memo actions []
   (let [dispatch (hooks/use-dispatch)
         result   (hooks/use-query query-actions [:db/ident :root])
-        {{status :session/status type :user/type} :root/user
+        {{status :session/status host :user/host} :root/user
          {room-key :session/room} :root/session} result]
     ($ :<>
       ($ :button.button.button-primary
         {:type "button"
          :on-click #(dispatch :session/request)
-         :disabled (or (= status :connecting) (= status :connected) (not= type :host))}
+         :disabled (or (= status :connecting) (= status :connected) (not host))}
         ($ icon {:name "globe-americas" :size 16})
-        (case [type status]
-          [:host :initial]      "Start online game"
-          [:host :connected]    "Connected"
-          [:host :disconnected] "Restart"
-          [:host :connecting]   "Connecting"
-          [:conn :connected]    "Connected"))
+        (case [host status]
+          [true :initial]      "Start online game"
+          [true :connected]    "Connected"
+          [true :disconnected] "Restart"
+          [true :connecting]   "Connecting"
+          [false :connected]   "Connected"))
       ($ :button.button.button-neutral
         {:type "button"
          :title "Share room link"
@@ -291,7 +280,7 @@
       ($ :button.button.button-danger
         {:type "button"
          :title "Disconnect"
-         :disabled (or (not= status :connected) (not= type :host))
+         :disabled (or (not host) (not= status :connected))
          :on-click #(dispatch :session/close)}
         ($ icon {:name "wifi-off" :size 16})
         "Quit"))))

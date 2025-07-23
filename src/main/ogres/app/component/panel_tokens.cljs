@@ -1,6 +1,6 @@
 (ns ogres.app.component.panel-tokens
   (:require [goog.object :as object :refer [getValueByKeys]]
-            [ogres.app.component :refer [icon image pagination fullscreen-dialog]]
+            [ogres.app.component :as component :refer [icon]]
             [ogres.app.geom :as geom]
             [ogres.app.hooks :as hooks]
             [ogres.app.util :refer [separate]]
@@ -18,10 +18,10 @@
                       useDroppable  use-droppable}]))
 
 (def ^:private query-editor
-  [{:root/user [:user/type]}
+  [{:root/user [:user/host]}
    {:root/token-images
     [:image/hash
-     :image/scope
+     :image/public
      :image/name
      :image/size
      :image/width
@@ -33,29 +33,24 @@
      :token-image/url]}])
 
 (def ^:private query-actions
-  [{:root/user [:user/type]}
+  [{:root/user [:user/host]}
    {:root/token-images
     [:image/hash
-     :image/scope
+     :image/public
      {:image/thumbnail
       [:image/hash]}]}])
 
 (def ^:private query-tokens
-  [{:root/user [:user/type]}
+  [{:root/user [:user/host]}
    {:root/token-images
     [:image/hash
      :image/name
-     :image/scope
+     :image/public
      {:image/thumbnail
       [:image/hash]}]}])
 
 (def ^:private query-bounds
   [[:user/bounds :default seg/zero]])
-
-(defn ^:private scopes [type]
-  (if (= type :host)
-    #{:public :private}
-    #{:public}))
 
 (defui ^:private draggable
   [{:keys [id children]}]
@@ -80,7 +75,7 @@
            {:data-type "default"}
            ($ icon {:name "dnd"}))
          (if (some? active)
-           ($ image {:hash active}
+           ($ component/image {:hash active}
              (fn [url]
                ($ :.token-gallery-item {:data-type "image" :style {:background-image (str "url(" url ")")}}))))))
      (.querySelector js/document "#root"))))
@@ -139,32 +134,26 @@
         ($ icon {:name "trash3-fill" :size 26})))))
 
 (defui ^:private paginated
-  [{:keys [name data limit]
-    :or   {data [] limit 10}}]
-  (let [[page set-page] (uix/use-state 1)
-        limit (dec limit)
-        pages (-> (count data) (/ limit) (js/Math.ceil))
-        start (-> (min page pages) (dec) (* limit) (max 0))
-        stop  (-> (+ start limit) (min (count data)))
-        data  (->> (repeat :placeholder)
-                   (concat (subvec data start stop))
-                   (take limit))]
-    ($ :<>
-      ($ gallery {:name name :data data})
-      (if (> pages 1)
-        ($ pagination
-          {:name  name
-           :label "Token image pages"
-           :pages (max pages 1)
-           :value (max (min pages page) 1)
-           :on-change set-page})))))
+  [{:keys [name data limit] :or {data [] limit 10}}]
+  ($ component/paginated {:data data :page-size (dec limit)}
+    (fn [{:keys [data pages page on-change]}]
+      (let [data (->> (repeat :placeholder) (concat data) (take (dec limit)))]
+        ($ :<>
+          ($ gallery {:name name :data data})
+          (if (> pages 1)
+            ($ component/pagination
+              {:name name
+               :label "Token image pages"
+               :pages pages
+               :value page
+               :on-change on-change})))))))
 
 (defui tokens []
   (let [result (hooks/use-query query-tokens [:db/ident :root])
         {data :root/token-images
-         {type :user/type} :root/user} result
+         {host :user/host} :root/user} result
         [active set-active] (uix/use-state nil)
-        [pub prv] (separate (comp #{:public} :image/scope) data)
+        [pub prv] (separate :image/public data)
         data-pub  (into [:default] (reverse pub))
         data-prv  (vec (reverse prv))
         drop-pub  (use-droppable #js {"id" "scope-pub"})
@@ -182,7 +171,7 @@
                     (set-active (.-id (.-over event)))
                     (set-active nil))))))})
     ($ :.form-tokens
-      (if (= type :host)
+      (if host
         ($ :<>
           ($ :header ($ :h2 "Tokens"))
           ($ :fieldset.fieldset.token-gallery
@@ -239,9 +228,9 @@
                 (if (and (some? drop) (not= drag "default"))
                   (cond
                     (= drop "scope-pub")
-                    (dispatch :token-images/change-scope drag :public)
+                    (dispatch :token-images/change-scope drag true)
                     (= drop "scope-prv")
-                    (dispatch :token-images/change-scope drag :private)
+                    (dispatch :token-images/change-scope drag false)
                     (str/includes? drop "trash")
                     (dispatch :token-images/remove drag nail))
                   (let [target (.. event -activatorEvent -target)
@@ -426,15 +415,9 @@
         publish (hooks/use-publish)
         {user :root/user images :root/token-images} (hooks/use-query query-editor [:db/ident :root])
         [selected set-selected] (uix/use-state nil)
-        [page set-page] (uix/use-state 1)
-        limit 20
-        data  (vec (reverse (filter (comp (scopes (:user/type user)) :image/scope) images)))
-        pages (js/Math.ceil (/ (count data) limit))
-        start (max (* (dec (min page pages)) limit) 0)
-        end   (min (+ start limit) (count data))
-        part  (subvec data start end)
+        data  (reverse (filter (comp (if (:user/host user) any? true?) :image/public) images))
         token (first (filter (comp #{selected} :image/hash) data))]
-    ($ fullscreen-dialog
+    ($ component/fullscreen-dialog
       {:on-close (:on-close props)}
       ($ :.token-editor
         (if token
@@ -444,36 +427,38 @@
                :image token
                :on-change
                (fn [hash bounds]
-                 (case (:user/type user)
-                   :host (publish :image/change-thumbnail hash bounds)
-                   :conn (publish :image/change-thumbnail-request hash bounds)))}))
+                 (if (:user/host user)
+                   (publish :image/change-thumbnail hash bounds)
+                   (publish :image/change-thumbnail-request hash bounds)))}))
           ($ :.token-editor-placeholder
             ($ icon {:name "crop" :size 64})
             "Select an image to crop and resize." ($ :br)
             "The original image will always be preserved."))
         ($ :.token-editor-gallery
-          ($ :.token-editor-gallery-paginated
-            ($ :.token-editor-gallery-thumbnails
-              (for [{{hash :image/hash} :image/thumbnail key :image/hash name :image/name} part]
-                ($ image {:key key :hash hash}
-                  (fn [url]
-                    ($ :label.token-editor-gallery-thumbnail
-                      {:style {:background-image (str "url(" url ")")} :aria-label name}
-                      ($ :input
-                        {:type "radio"
-                         :name "token-editor-image"
-                         :checked (= selected key)
-                         :value key
-                         :on-change
-                         (fn []
-                           (set-selected key))}))))))
-            ($ pagination
-              {:name "token-editor-gallery"
-               :label "Token image pages"
-               :pages pages
-               :value page
-               :on-change set-page
-               :class-name "dark"}))
+          ($ component/paginated {:data data :page-size 20}
+            (fn [{:keys [data pages page on-change]}]
+              ($ :.token-editor-gallery-paginated
+                ($ :.token-editor-gallery-thumbnails
+                  (for [{{hash :image/hash} :image/thumbnail key :image/hash name :image/name} data]
+                    ($ component/image {:key key :hash hash}
+                      (fn [url]
+                        ($ :label.token-editor-gallery-thumbnail
+                          {:style {:background-image (str "url(" url ")")} :aria-label name}
+                          ($ :input
+                            {:type "radio"
+                             :name "token-editor-image"
+                             :checked (= selected key)
+                             :value key
+                             :on-change
+                             (fn []
+                               (set-selected key))}))))))
+                ($ component/pagination
+                  {:name "token-editor-gallery"
+                   :label "Token image pages"
+                   :pages pages
+                   :value page
+                   :on-change on-change
+                   :class-name "dark"}))))
           (if token
             ($ :form.token-editor-options
               {:key selected
@@ -518,7 +503,7 @@
   (let [[editing set-editing] (uix/use-state false)
         dispatch (hooks/use-dispatch)
         result   (hooks/use-query query-actions [:db/ident :root])
-        {{type :user/type} :root/user
+        {{host :user/host} :root/user
          images :root/token-images} result
         upload   (hooks/use-image-uploader {:type :token})
         input    (uix/use-ref)]
@@ -539,7 +524,7 @@
       ($ :button.button.button-neutral
         {:type "button"
          :title "Crop"
-         :disabled (not (seq (filter (comp (scopes type) :image/scope) images)))
+         :disabled (not (seq (filter (comp (if host any? true?) :image/public) images)))
          :on-click (partial set-editing not)}
         ($ icon {:name "crop" :size 18})
         "Edit images")
@@ -547,7 +532,7 @@
         {:type "button"
          :title "Remove all tokens"
          :aria-label "Remove all tokens"
-         :disabled (or (= type :conn) (not (seq images)))
+         :disabled (or (not host) (not (seq images)))
          :on-click
          (fn []
            (let [xf (mapcat (juxt :image/hash (comp :image/hash :image/thumbnail)))]

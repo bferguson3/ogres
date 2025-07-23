@@ -2,7 +2,7 @@
   (:require [datascript.core :as ds]
             [clojure.set :refer [union difference]]
             [clojure.string :refer [trim]]
-            [ogres.app.const :refer [grid-size half-size]]
+            [ogres.app.const :refer [grid-size half-size grid-dist]]
             [ogres.app.geom :as geom]
             [ogres.app.matrix :as matrix]
             [ogres.app.segment :as seg]
@@ -63,10 +63,6 @@
 
 (defn ^:private constrain [n min max]
   (clojure.core/max (clojure.core/min n max) min))
-
-(defn ^:private mode-allowed? [mode type]
-  (not (and (contains? #{:mask :mask-toggle :mask-remove :grid :note} mode)
-            (not= type :host))))
 
 (defn ^:private initiative-order [a b]
   (let [f (juxt :initiative/roll :db/id)]
@@ -169,7 +165,7 @@
   event-tx-fn :camera/change-mode
   [data _ mode]
   (let [user (ds/entity data [:db/ident :user])]
-    (if (mode-allowed? mode (:user/type user))
+    (if (or (:user/host user) (not (#{:mask :mask-toggle :mask-remove :grid :note} mode)))
       [{:db/id (:db/id (:user/camera user)) :camera/draw-mode mode}]
       [])))
 
@@ -367,6 +363,12 @@
   [[:db.fn/call assoc-scene :scene/grid-size size]])
 
 (defmethod
+  ^{:doc "Updates grid distance for the scene."}
+  event-tx-fn :scene/change-grid-dist
+  [_ _ dist]
+  [[:db.fn/call assoc-scene :scene/grid-dist dist]])
+
+(defmethod
   ^{:doc "Applies both a grid origin and tile size to the current scene."}
   event-tx-fn :scene/apply-grid-options
   [data _ origin size]
@@ -398,7 +400,8 @@
   [data]
   (let [user (ds/entity data [:db/ident :user])
         scene (:db/id (:camera/scene (:user/camera user)))]
-    [[:db/retract scene :scene/grid-size]]))
+    [[:db/retract scene :scene/grid-size]
+     [:db/retract scene :scene/grid-dist]]))
 
 (defmethod
   ^{:doc "Updates whether or not the grid is drawn onto the current scene."}
@@ -643,7 +646,7 @@
             notes  :scene/notes
             props  :scene/props} :camera/scene
            camera :db/id} :user/camera
-          type :user/type} :root/user
+          host :user/host} :root/user
          {conns :session/conns} :root/session} result
         bounds (geom/bounding-rect (seq rect))
         occupied (into #{} (comp (mapcat :user/dragging) (map :db/id)) conns)]
@@ -654,9 +657,9 @@
             :let   [{id :db/id} entity]
             :let   [object (geom/object-bounding-rect entity)]
             :when  (and (not (occupied id))
-                        (not (and (= type :conn) (:object/hidden entity)))
-                        (not (and (= type :conn) (= (:object/type entity) :note/note)))
-                        (not (and (= type :conn) (= (:object/type entity) :prop/prop)))
+                        (not (and (not host) (:object/hidden entity)))
+                        (not (and (not host) (= (:object/type entity) :note/note)))
+                        (not (and (not host) (= (:object/type entity) :prop/prop)))
                         (geom/rect-intersects-rect object bounds))]
         {:db/id id})}]))
 
@@ -775,33 +778,35 @@
 
 ;; --- Token Images ---
 (defmethod event-tx-fn :token-images/create-many
-  [_ _ images scope]
-  (into [{:db/ident :root
-          :root/token-images
-          (for [[{:keys [hash name size width height]} _] images]
-            {:image/hash hash
-             :image/name name
-             :image/size size
-             :image/scope scope
-             :image/width width
-             :image/height height})}] cat
-        (for [[image thumbnail] images]
-          (if (= (:hash image) (:hash thumbnail))
-            [{:image/hash (:hash image) :image/thumbnail [:image/hash (:hash image)]}]
-            [{:image/hash (:hash thumbnail)
-              :image/name (:name thumbnail)
-              :image/size (:size thumbnail)
-              :image/width (:width thumbnail)
-              :image/height (:height thumbnail)}
-             {:image/hash (:hash image) :image/thumbnail [:image/hash (:hash thumbnail)]}]))))
+  ([_ event images]
+   [[:db.fn/call event-tx-fn event images false]])
+  ([_ _ images public?]
+   (into [{:db/ident :root
+           :root/token-images
+           (for [[{:keys [hash name size width height]} _] images]
+             {:image/hash hash
+              :image/name name
+              :image/size size
+              :image/public public?
+              :image/width width
+              :image/height height})}] cat
+         (for [[image thumbnail] images]
+           (if (= (:hash image) (:hash thumbnail))
+             [{:image/hash (:hash image) :image/thumbnail [:image/hash (:hash image)]}]
+             [{:image/hash (:hash thumbnail)
+               :image/name (:name thumbnail)
+               :image/size (:size thumbnail)
+               :image/width (:width thumbnail)
+               :image/height (:height thumbnail)}
+              {:image/hash (:hash image) :image/thumbnail [:image/hash (:hash thumbnail)]}])))))
 
 (defmethod
-  ^{:doc "Change the scope of the token image by the given hash to the
-          given scope, typically `:public` or `:private`."}
+  ^{:doc "Change the visibility of the given token image to public (true)
+          or private (false)."}
   event-tx-fn :token-images/change-scope
-  [_ _ hash scope]
+  [_ _ hash public?]
   [[:db/add -1 :image/hash hash]
-   [:db/add -1 :image/scope scope]])
+   [:db/add -1 :image/public public?]])
 
 (defmethod event-tx-fn :token-images/remove
   [_ _ image thumb]
